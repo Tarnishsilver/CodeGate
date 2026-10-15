@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.pnpm-store/
+
+# Vendored third-party checkouts (cloned by setup.sh)
+Scalpel/
+LibCST/
+
+# Optional VS Code extension build (not part of the published surface)
+vscode-extension/
+
+# Secrets & local config
+.env
+.env.*
+!.env.example
+
+# Logs, caches, reports
+*.log
+.manus-logs/
+codegate-report.txt
+leakguard-report.txt
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
