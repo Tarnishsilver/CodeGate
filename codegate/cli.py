@@ -133,6 +133,11 @@ def main(argv: list[str] | None = None) -> int:
         return server_main(args_list[1:])
     if args_list and args_list[0] == "fix":
         return _fix_main(args_list[1:])
+    if args_list and args_list[0] in {"ask", "ai"}:
+        from .ai_cli import main as ai_main
+        use_color = should_use_color()
+        c = Colors if use_color else report._NoColors()
+        return ai_main(args_list, c)
 
     if hasattr(sys.stdout, "reconfigure"):
         try:

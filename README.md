@@ -7,7 +7,9 @@ sockets, database connections, and subprocess handles — and rewrites the unsaf
 into a `with` block that is correct by construction.
 
 It is deterministic: no LLM call, no network access, no API key. Same input, same
-verdict, every run.
+verdict, every run. An [optional AWS Bedrock layer](#ai-remediation-advisor-optional-aws-bedrock)
+can explain a leak the engine has already proven and suggest a fix, but it is off by
+default and never participates in detection.
 
 ---
 
@@ -181,6 +183,61 @@ control-flow path, interactive AST tree and CFG graph views, an ensemble-verific
 panel, and an admin view for tracking leak trends across repositories and branches.
 It talks to the same Python engine through the REST API.
 
+## AI remediation advisor (optional, AWS Bedrock)
+
+Detection stays deterministic. This is a separate, **opt-in** layer that explains a
+leak the analyzer has *already proven* and proposes a fix — it never decides whether a
+leak exists, and it never parses code to find one.
+
+```bash
+pip install -e ".[ai]"          # adds boto3
+export CODEGATE_AI=1
+export CODEGATE_BEDROCK_MODEL=anthropic.claude-3-5-sonnet-20241022-v2:0
+aws configure                    # or rely on an instance/task role
+
+codegate ask demos/vuln.py --ai      # one-shot guidance per finding
+codegate ai   demos/vuln.py --ai      # interactive session
+```
+
+`codegate ai` opens a session over the proven findings — pick one by number, then ask
+follow-ups:
+
+```
+1 finding(s) proven by the CFG engine:
+  1. demos/vuln.py:12 · get_user_status() · CODEGATE001 · Resource 'f' not released…
+
+codegate-ai> 1
+  Why it leaks
+    open(path) binds f; the early return exits the function while f is still open…
+
+  How to fix
+    1. Wrap the body in `with open(path) as f:`.
+    2. Keep the early return inside the block.
+
+codegate-ai> why not try/finally instead?
+  …follow-up answer, with conversation history…
+```
+
+Also available over HTTP for the dashboard:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /ai-status` | whether the advisor is enabled, plus model and region |
+| `POST /advise` | guidance for findings the **server** just proved (`source`, optional `line` / `question`) |
+
+### Why it is built this way
+
+| Property | How it is enforced |
+|---|---|
+| **Detection is never AI** | `analyzer.py` does not import `bedrock`; the advisor only accepts an already-proven `Leak` object |
+| **Off unless asked** | needs *both* `CODEGATE_AI=1` (or `--ai`) *and* a configured model — stray AWS credentials alone start nothing |
+| **No finding injection** | `POST /advise` re-analyzes the posted source server-side; client-supplied "findings" are ignored |
+| **Cannot overrule the analyzer** | the system prompt forbids disputing the verdict or asserting new leaks; any extra hunch is returned under `other_suggestions`, explicitly unverified |
+| **Minimal disclosure** | only the *enclosing function* is sent, never the rest of the file or repo |
+| **Fails closed** | every failure returns `None`/a structured status — a Bedrock outage can never break a scan |
+
+Config lives in [`.env.example`](.env.example). See [`codegate/bedrock.py`](codegate/bedrock.py).
+
 ## Results
 
 Deterministic analysis benchmarked against an LLM on 19 hand-labeled cases
@@ -203,29 +260,34 @@ result.
 ## Project layout
 
 ```
-codegate/          analyzer, CFG walk, autofix, CLI, CI mode, REST API, benchmark
-tests/             132 tests + leak/safe fixtures
-demos/             runnable leak and safe-pattern cases, one file per path shape
-frontend/          React dashboard (leak reports, AST/CFG visualizer, admin)
-docs/              roadmap, benchmark data, system-design interview notes
-scripts/           setup helpers
-Dockerfile         multi-stage build: frontend + Python analyzer
-action.yml         reusable GitHub Action
+codegate/            analyzer, CFG walk, autofix, CLI, CI mode, REST API, benchmark
+codegate/bedrock.py  optional AI remediation advisor (never imported by the analyzer)
+demos/               runnable leak and safe-pattern cases, one file per path shape
+frontend/            React dashboard (leak reports, AST/CFG visualizer, admin)
+docs/                roadmap, benchmark data, system-design interview notes
+scripts/             setup helpers
+Dockerfile           multi-stage build: frontend + Python analyzer
+action.yml           reusable GitHub Action
 ```
 
 ## Tests
 
 ```bash
-python -m pytest tests -q          # 132 tests
+python -m codegate.cli demos/            # every demo asserts its own expected verdict
 python -m codegate.cli demos/ --json
 ```
 
+The `demos/` corpus doubles as the regression suite — each file pairs a leaking function
+with a safe equivalent, and every one is checked against its documented outcome.
+
 ## Documentation
 
-| Doc                                                  | What it covers                                             |
-| ---------------------------------------------------- | ---------------------------------------------------------- |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md)                 | Scalpel/LibCST division of responsibility, CFG walk design |
-| [`codegate/resources.yaml`](codegate/resources.yaml) | resource acquire/release rules                             |
+| Doc | What it covers |
+| --- | --- |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Scalpel/LibCST division of responsibility, CFG walk design |
+| [`BENCHMARK.md`](BENCHMARK.md) | deterministic vs LLM, per-case results |
+| [`codegate/resources.yaml`](codegate/resources.yaml) | resource acquire/release rules |
+| [`.env.example`](.env.example) | optional Bedrock advisor configuration |
 
 ## License
 

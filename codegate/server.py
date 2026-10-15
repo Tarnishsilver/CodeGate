@@ -118,7 +118,8 @@ class _Handler(BaseHTTPRequestHandler):
     # routing
     # ------------------------------------------------------------------
     def do_GET(self) -> None:
-        if self.path.rstrip("/") == "/health":
+        path = self.path.rstrip("/")
+        if path == "/health":
             c = self.cache
             redis_stats = c.redis_mgr.get_stats()
             self._send(200, {
@@ -130,6 +131,9 @@ class _Handler(BaseHTTPRequestHandler):
                 "python": __import__("sys").version.split()[0],
                 "redis": redis_stats,
             })
+        elif path == "/ai-status":
+            from .bedrock import bedrock_status
+            self._send(200, {"ok": True, **bedrock_status()})
         else:
             self._send(404, {"ok": False, "error": "not found"})
 
@@ -141,6 +145,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._analyze_one(body)
             elif path == "/analyze-batch":
                 self._analyze_batch(body)
+            elif path == "/advise":
+                self._advise(body)
             elif path == "/shutdown":
                 tok = body.get("token", "")
                 if self.shutdown_token and tok != self.shutdown_token:
@@ -209,6 +215,55 @@ class _Handler(BaseHTTPRequestHandler):
             "total_leaks": total_leaks,
             "results": results,
         })
+
+    def _advise(self, body: dict[str, Any]) -> None:
+        """Advisory remediation guidance for findings THIS server just proved.
+
+        The client cannot supply findings: the source is re-analyzed here with
+        the deterministic engine, so a caller cannot inject a synthetic leak
+        and have the model "confirm" it. The advisor only ever decorates
+        findings produced locally, and only when explicitly enabled.
+        """
+        from .analyzer import analyze_source
+        from .bedrock import RemediationAdvisor, bedrock_status
+
+        status = bedrock_status()
+        if not status["available"]:
+            self._send(200, {"ok": False, "ai": False, "error": status["reason"], "status": status})
+            return
+
+        source = body.get("source", "")
+        filename = body.get("filename", "input.py")
+        question = body.get("question", "")
+        want_line = body.get("line")
+        if not isinstance(source, str) or not source.strip():
+            self._send(400, {"ok": False, "error": "source is required"})
+            return
+
+        try:
+            leaks = analyze_source(source, filename)
+        except SyntaxError as exc:
+            self._send(400, {"ok": False, "error": f"SyntaxError: {exc}"})
+            return
+
+        if want_line is not None:
+            leaks = [lk for lk in leaks if lk.line == want_line]
+        if not leaks:
+            self._send(200, {"ok": True, "ai": True, "guidance": [],
+                             "note": "no leak proven for this source; nothing to advise"})
+            return
+
+        advisor = RemediationAdvisor()
+        out = []
+        for leak in leaks:
+            guidance = (advisor.advise(leak, source, question) if question
+                        else advisor.explain(leak, source))
+            if guidance is None:
+                out.append({"finding": leak.to_dict(), "guidance": None,
+                            "error": "advisor unavailable or model error"})
+            else:
+                out.append({"finding": leak.to_dict(), "guidance": guidance.to_dict()})
+        self._send(200, {"ok": True, "ai": True, "model": status["model_label"], "guidance": out})
 
 
 def _analyze(source: str, filename: str, fix: bool, ensemble: bool) -> dict[str, Any]:

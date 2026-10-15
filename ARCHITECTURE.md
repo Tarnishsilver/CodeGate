@@ -135,9 +135,15 @@ codegate/
   fix.py             # LibCST transformer for with-fix
   report.py
   cli.py             # codegate / ci / install-hook / benchmark / serve
-tests/
-  fixtures/ leak/safe cases
+  ai_cli.py          # `codegate ask` / `codegate ai` (interactive guidance)
+  bedrock.py         # optional AWS Bedrock advisor — imports analyzer, never the reverse
+demos/
+  tc_*.py            # leak/safe pairs per path shape (also the regression corpus)
 ```
+
+The dependency edge is one-way and enforced by review: `bedrock.py` may import the
+analyzer, the analyzer must never import `bedrock.py`. Detection therefore stays
+deterministic even when the advisor is enabled.
 
 Earlier throwaway prototypes lived in `experiments/` and were removed once the engine
 landed in `codegate/`.
